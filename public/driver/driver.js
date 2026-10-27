@@ -50,6 +50,9 @@ const preTripCalibInfo = document.getElementById('preTripCalibInfo');
 const preTripCameraSelect = document.getElementById('preTripCameraSelect');
 const preTripStreamUrl = document.getElementById('preTripStreamUrl');
 const esp32UrlGroup = document.getElementById('esp32UrlGroup');
+const connectStreamBtn = document.getElementById('connectStreamBtn');
+const hudStreamUrlInput = document.getElementById('hudStreamUrlInput');
+const hudConnectBtn = document.getElementById('hudConnectBtn');
 
 // Active Trip Elements
 const kioskVideo = document.getElementById('kioskVideo');
@@ -193,12 +196,103 @@ document.getElementById('preTripLogoutBtn').addEventListener('click', () => {
   showScreen(screenLogin);
 });
 
-// Pre-load centralized configuration
-loadAppConfig().then(cfg => {
-  if (preTripStreamUrl && cfg && (cfg.proxyStreamUrl || cfg.esp32StreamUrl)) {
-    preTripStreamUrl.value = cfg.proxyStreamUrl || cfg.esp32StreamUrl;
+// Pre-load centralized or dynamically stored configuration
+const savedStreamUrl = localStorage.getItem('drowsyguard_stream_url');
+if (savedStreamUrl) {
+  if (preTripStreamUrl) preTripStreamUrl.value = savedStreamUrl;
+  if (hudStreamUrlInput) hudStreamUrlInput.value = savedStreamUrl;
+  videoSource.setEsp32Url(savedStreamUrl);
+} else {
+  loadAppConfig().then(cfg => {
+    if (preTripStreamUrl && cfg && (cfg.proxyStreamUrl || cfg.esp32StreamUrl)) {
+      const defaultUrl = cfg.proxyStreamUrl || cfg.esp32StreamUrl;
+      preTripStreamUrl.value = defaultUrl;
+      if (hudStreamUrlInput) hudStreamUrlInput.value = defaultUrl;
+    }
+  }).catch(() => {});
+}
+
+// ── Dynamic Stream URL Connection Handler ──────────────────────────────────
+async function handleConnectStream(url) {
+  if (!url || !url.trim()) {
+    showToast('Please enter an ESP32 stream link', 'warning');
+    return;
   }
-}).catch(() => {});
+  url = url.trim();
+
+  // Mixed-content security warning (Render HTTPS app requesting HTTP stream)
+  if (window.location.protocol === 'https:' && url.startsWith('http://')) {
+    showToast('⚠️ Mixed-content warning: HTTPS pages block plain HTTP streams. Please use an HTTPS Ngrok tunnel link.', 'warning');
+  }
+
+  // Persist URL so driver stations remember the link
+  localStorage.setItem('drowsyguard_stream_url', url);
+
+  // Synchronize inputs across both Pre-Trip and Active HUD
+  if (preTripStreamUrl) preTripStreamUrl.value = url;
+  if (hudStreamUrlInput) hudStreamUrlInput.value = url;
+
+  if (preTripCameraStatus) {
+    preTripCameraStatus.textContent = 'Connecting…';
+    preTripCameraStatus.className = 'status-chip warning';
+  }
+
+  try {
+    await videoSource.connectDynamicStream(url);
+    applyCanvasMirror('esp32');
+    if (kioskSourceLabel) kioskSourceLabel.textContent = 'ESP32-CAM';
+    showToast(`Connected to stream: ${url.slice(0, 35)}…`, 'info');
+  } catch (err) {
+    showToast('Failed to connect to stream: ' + err.message, 'error');
+  }
+}
+
+if (connectStreamBtn) {
+  connectStreamBtn.addEventListener('click', () => {
+    const url = preTripStreamUrl ? preTripStreamUrl.value : '';
+    handleConnectStream(url);
+  });
+}
+if (preTripStreamUrl) {
+  preTripStreamUrl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleConnectStream(preTripStreamUrl.value);
+    }
+  });
+}
+
+if (hudConnectBtn) {
+  hudConnectBtn.addEventListener('click', () => {
+    const url = hudStreamUrlInput ? hudStreamUrlInput.value : '';
+    handleConnectStream(url);
+  });
+}
+if (hudStreamUrlInput) {
+  hudStreamUrlInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleConnectStream(hudStreamUrlInput.value);
+    }
+  });
+}
+
+// Update UI chips when VideoSource connection status changes
+videoSource.onStatusChange = (status) => {
+  console.log('[VideoSource Status]:', status);
+  if (preTripCameraStatus) {
+    if (status.includes('Connected ✓')) {
+      preTripCameraStatus.textContent = 'ESP32 Linked ✓';
+      preTripCameraStatus.className = 'status-chip safe';
+    } else if (status.includes('Connecting')) {
+      preTripCameraStatus.textContent = 'Connecting…';
+      preTripCameraStatus.className = 'status-chip warning';
+    } else if (status.includes('failed') || status.includes('error')) {
+      preTripCameraStatus.textContent = 'Stream Offline ✗';
+      preTripCameraStatus.className = 'status-chip offline';
+    }
+  }
+};
 
 // ── Camera Selection & Mirror Helper ──────────────────────────────────────
 function applyCanvasMirror(mode = (preTripCameraSelect ? preTripCameraSelect.value : videoSource.mode)) {
@@ -338,7 +432,11 @@ if (testStreamBtn) {
         showToast('Webcam access error: ' + err.message, 'error');
       }
     } else {
-      const url = (preTripStreamUrl ? preTripStreamUrl.value.trim() : '') || '/esp32/stream';
+      let url = (preTripStreamUrl ? preTripStreamUrl.value.trim() : '') || localStorage.getItem('drowsyguard_stream_url') || '/esp32/stream';
+      if (url.includes('ngrok') && !url.includes('ngrok-skip-browser-warning')) {
+        const sep = url.includes('?') ? '&' : '?';
+        url = `${url}${sep}ngrok-skip-browser-warning=true`;
+      }
       const testImg = new Image();
       testImg.onload = () => {
         preTripCameraStatus.textContent = 'ESP32 Linked ✓';
@@ -350,6 +448,7 @@ if (testStreamBtn) {
         preTripCameraStatus.className = 'status-chip offline';
         showToast('ESP32 stream unreachable. Please check WiFi or use Webcam.', 'error');
       };
+      testImg.crossOrigin = 'anonymous';
       testImg.src = url + (url.includes('?') ? '&' : '?') + 't=' + Date.now();
     }
   });
@@ -446,11 +545,13 @@ if (btnResumeBreak) {
 // ── Begin Trip Shift Action ───────────────────────────────────────────────
 document.getElementById('beginTripBtn').addEventListener('click', async () => {
   const mode = preTripCameraSelect ? preTripCameraSelect.value : 'esp32';
-  const streamUrl = (preTripStreamUrl ? preTripStreamUrl.value.trim() : '') || '/esp32/stream';
+  const streamUrl = (preTripStreamUrl ? preTripStreamUrl.value.trim() : '') || localStorage.getItem('drowsyguard_stream_url') || '/esp32/stream';
 
   videoSource.mode = mode;
   if (mode === 'esp32') {
     videoSource.setEsp32Url(streamUrl);
+    localStorage.setItem('drowsyguard_stream_url', streamUrl);
+    if (hudStreamUrlInput) hudStreamUrlInput.value = streamUrl;
   }
   applyCanvasMirror(mode);
   kioskSourceLabel.textContent = mode === 'webcam' ? 'WEBCAM' : 'ESP32-CAM';
@@ -483,8 +584,9 @@ document.getElementById('beginTripBtn').addEventListener('click', async () => {
     fatigueEngine.calibrationEAR = baseline;
     fatigueEngine.calibrated = true;
 
-    // Wire alert engine incident transitions
+    // Wire alert engine incident transitions with 8-second snapshot cooldown
     let lastSnapshotTriggerTime = 0;
+    const SNAPSHOT_COOLDOWN_MS = 8000; // 8-second incident snapshot cooldown
 
     alertEngine.onLevelChange = (level, message) => {
       if (level === 'warning') {
@@ -498,10 +600,10 @@ document.getElementById('beginTripBtn').addEventListener('click', async () => {
         tripMicrosleepCount.textContent = counts.microsleeps;
       }
 
-      // Automatically capture snapshot on severe fatigue
+      // Automatically capture snapshot on severe fatigue with 8-second cooldown
       if (level === 'microsleep' || level === 'danger') {
         const now = Date.now();
-        if (now - lastSnapshotTriggerTime > 4000) {
+        if (now - lastSnapshotTriggerTime >= SNAPSHOT_COOLDOWN_MS) {
           lastSnapshotTriggerTime = now;
           captureIncidentSnapshot(level);
         }
@@ -538,7 +640,10 @@ document.getElementById('beginTripBtn').addEventListener('click', async () => {
 });
 
 // ── In-Cab Detection Loop ─────────────────────────────────────────────────
-function loop() {
+let lastDetectionTime = 0;
+const DETECTION_INTERVAL_MS = 45; // ~22 FPS inference cap prevents browser GPU/CPU starvation
+
+function loop(timestamp = performance.now()) {
   if (!isTripRunning) return;
   animFrameId = requestAnimationFrame(loop);
 
@@ -553,7 +658,11 @@ function loop() {
     kioskCanvas.height = h;
   }
 
-  faceDetector.send(el);
+  // Throttle FaceMesh processing to keep stream display and UI thread fluid
+  if (timestamp - lastDetectionTime >= DETECTION_INTERVAL_MS) {
+    lastDetectionTime = timestamp;
+    faceDetector.send(el);
+  }
 }
 
 function handleFaceResults(faceData) {

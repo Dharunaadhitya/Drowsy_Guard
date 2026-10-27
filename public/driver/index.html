@@ -86,9 +86,14 @@
         </div>
 
         <div class="form-group" id="esp32UrlGroup">
-          <label class="form-label" for="preTripStreamUrl">ESP32 Stream Endpoint</label>
-          <input type="url" id="preTripStreamUrl" class="form-input num" value="/esp32/stream" />
-          <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">Target camera IP configured in <code>config.json</code></div>
+          <label class="form-label" for="preTripStreamUrl">Enter Stream Link (ESP32-CAM / Tunnel URL)</label>
+          <div style="display: flex; gap: 8px;">
+            <input type="url" id="preTripStreamUrl" class="form-input num" placeholder="e.g. https://xxxx.ngrok-free.app/stream" value="/esp32/stream" style="flex: 1;" />
+            <button type="button" class="btn btn-primary" id="connectStreamBtn" style="white-space: nowrap; padding: 0 16px;">Connect</button>
+          </div>
+          <div style="font-size: 11px; color: var(--text-muted); margin-top: 5px;">
+            Paste an HTTPS Ngrok tunnel link or ESP32-CAM stream URL to bypass backend <code>config.json</code>
+          </div>
         </div>
 
         <div style="display: flex; align-items: center; gap: 10px; margin-top: 10px;">
@@ -136,6 +141,13 @@
 
       <!-- Left Column: Video & Landmark Overlay -->
       <div class="kiosk-video-column">
+        <!-- Dynamic Stream URL Toolbar for Live Active Shift -->
+        <div class="hud-stream-bar" id="hudStreamBar" style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px; background: var(--surface); padding: 6px 12px; border-radius: var(--radius-md); border: 1px solid var(--border);">
+          <span style="font-size: 12px; font-weight: 600; color: var(--text-muted); white-space: nowrap;">📡 Stream URL:</span>
+          <input type="url" id="hudStreamUrlInput" class="form-input num" placeholder="Paste Ngrok / ESP32 stream link..." style="flex: 1; height: 32px; font-size: 12px; padding: 4px 8px;" />
+          <button type="button" class="btn btn-primary btn-sm" id="hudConnectBtn" style="white-space: nowrap; height: 32px; padding: 0 12px;">Connect</button>
+        </div>
+
         <div class="kiosk-video-wrapper level-normal" id="kioskVideoWrapper">
           <video id="kioskVideo" autoplay muted playsinline></video>
           <img id="kioskEsp32" alt="ESP32 Stream" />

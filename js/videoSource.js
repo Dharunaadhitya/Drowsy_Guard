@@ -7,33 +7,57 @@
 import { loadAppConfig, parseEsp32Config } from './config.js';
 
 export class VideoSource {
-  constructor() {
+  constructor(initialUrl = null) {
     this.mode = 'esp32';
-    this.esp32Url = '/esp32/stream';
+    this.esp32Url = initialUrl || '/esp32/stream';
     this.stream = null;
     this.videoEl = null;
     this.imgEl = null;
     this.onStatusChange = null; // callback(status: string)
     this._esp32Connected = false; // true once first MJPEG frame arrives
+    this._customUrlSet = Boolean(initialUrl);
 
-    // Async init from centralized config
+    // Async init from centralized config only if no custom dynamic URL was provided
     loadAppConfig().then(cfg => {
-      if (cfg && (cfg.proxyStreamUrl || cfg.esp32StreamUrl)) {
+      if (!this._customUrlSet && cfg && (cfg.proxyStreamUrl || cfg.esp32StreamUrl)) {
         this.esp32Url = cfg.proxyStreamUrl || cfg.esp32StreamUrl;
       }
     }).catch(() => {});
   }
 
   /** Attach to a <video> element (webcam) or <img> element (ESP32) */
-  async start(videoEl, imgEl = null) {
+  async start(videoEl, imgEl = null, customUrl = null) {
     this.videoEl = videoEl;
     this.imgEl = imgEl;
+    if (customUrl) {
+      this.setEsp32Url(customUrl);
+    }
     await this._applyMode();
   }
 
+  /**
+   * Set or update the ESP32 stream URL dynamically.
+   * If ESP32 mode is currently active, immediately reloads the <img> source.
+   */
   setEsp32Url(url) {
     if (!url) return;
     this.esp32Url = url.trim();
+    this._customUrlSet = true;
+    if (this.mode === 'esp32' && this.imgEl) {
+      this._disconnectEsp32();
+      this._startEsp32();
+    }
+  }
+
+  /**
+   * Connect to a dynamic stream URL provided by the frontend.
+   */
+  async connectDynamicStream(url) {
+    if (!url) return;
+    this.setEsp32Url(url);
+    if (this.mode !== 'esp32') {
+      await this.switchMode('esp32');
+    }
   }
 
   async switchMode(mode) {
@@ -78,8 +102,8 @@ export class VideoSource {
         !this.videoEl.paused
       );
     }
-    // ESP32: rely on internal flag set by onload (naturalWidth can be unreliable for MJPEG)
-    return this._esp32Connected;
+    // ESP32: ready once first frame arrives or positive dimensions are set
+    return this._esp32Connected || Boolean(this.imgEl && this.imgEl.naturalWidth > 0);
   }
 
   async _applyMode() {
@@ -135,7 +159,15 @@ export class VideoSource {
       return;
     }
 
-    const streamUrl = this.esp32Url || '/esp32/stream';
+    let streamUrl = this.esp32Url || '/esp32/stream';
+
+    // If using an Ngrok free-tier tunnel URL, append bypass query param
+    // to prevent Ngrok from returning the HTML interstitial warning instead of MJPEG
+    if (streamUrl.includes('ngrok') && !streamUrl.includes('ngrok-skip-browser-warning')) {
+      const sep = streamUrl.includes('?') ? '&' : '?';
+      streamUrl = `${streamUrl}${sep}ngrok-skip-browser-warning=true`;
+    }
+
     console.log('[VideoSource] ESP32 stream connecting:', streamUrl);
     this._emit('ESP32-CAM: Connecting…');
     this._esp32Connected = false;
@@ -154,7 +186,7 @@ export class VideoSource {
     this.imgEl.onerror = () => {
       this._esp32Connected = false;
       console.error('[VideoSource] ESP32 stream error — URL:', streamUrl);
-      this._emit('ESP32-CAM: Connection failed — check camera IP in config.json');
+      this._emit('ESP32-CAM: Connection failed — check stream link or mixed-content restriction');
     };
 
     this.imgEl.crossOrigin = 'anonymous';
