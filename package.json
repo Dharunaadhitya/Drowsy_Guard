@@ -5,7 +5,8 @@
   "private": true,
   "scripts": {
     "start": "node server.js",
-    "build": "echo 'Build complete'",
+    "build": "npm rebuild better-sqlite3",
+    "postinstall": "npm rebuild better-sqlite3",
     "seed": "node seed.js"
   },
   "engines": {
